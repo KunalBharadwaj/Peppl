@@ -1,0 +1,55 @@
+# Idle-workspace reaper.
+#
+# The orchestrator tracks per-workspace liveness in memory (runner heartbeats)
+# and exposes POST /reap, which deletes every workspace idle past IDLE_TTL_MS.
+# This CronJob is just the scheduler: every 5 minutes it pokes /reap. Keeping the
+# delete logic in the orchestrator (which already holds the k8s client and the
+# liveness map) means the CronJob needs nothing but curl.
+#
+# Assumptions (adjust to your cluster):
+#   - The orchestrator is reachable in-cluster at http://orchestrator-simple:3002
+#     (i.e. a Service named `orchestrator-simple` on port 3002 in this namespace).
+#   - A Secret named `peppl-internal` holds key `internal-token`, matching the
+#     orchestrator's INTERNAL_TOKEN, so the sweep is authenticated.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: workspace-reaper
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Give up on a stuck sweep rather than letting Jobs pile up.
+      activeDeadlineSeconds: 60
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: reaper
+              image: curlimages/curl:8.8.0
+              env:
+                - name: INTERNAL_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: peppl-internal
+                      key: internal-token
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              command: ["/bin/sh", "-c"]
+              args:
+                - >
+                  curl -fsS -X POST
+                  -H "x-internal-token: ${INTERNAL_TOKEN}"
+                  http://orchestrator-simple:3002/reap
