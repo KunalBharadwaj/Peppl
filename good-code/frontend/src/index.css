@@ -1,9 +1,16 @@
 body {
-  font-family: 'Inter', sans-serif;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu,
+    Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
   font-size: 14px;
-
-  background-color: #151515;
+  background-color: #0f1115;
   color: white;
-  zoom: 1;
   margin: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: inherit;
 }
