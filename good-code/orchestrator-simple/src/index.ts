@@ -6,6 +6,7 @@ import yaml from "yaml";
 import path from "path";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
+import jwt from "jsonwebtoken";
 import { KubeConfig, AppsV1Api, CoreV1Api, NetworkingV1Api } from "@kubernetes/client-node";
 import { assertAuthConfig, AuthedRequest, requireAuth } from "./auth";
 import { connectMongo, getReplOwner, pingMongo } from "./mongo";
@@ -14,6 +15,10 @@ import { isValidReplId } from "./validation";
 import { logger } from "./logger";
 
 const app = express();
+// Behind the ingress, the client IP is in X-Forwarded-For. Trust exactly one
+// proxy hop so express-rate-limit keys on the real client IP instead of
+// rate-limiting every user as the single ingress IP.
+app.set("trust proxy", 1);
 app.use(express.json());
 app.use(cors());
 
@@ -39,6 +44,19 @@ const IDLE_TTL_MS = Number(process.env.IDLE_TTL_MS ?? 30 * 60 * 1000); // 30 min
 const INTERNAL_TOKEN = process.env.INTERNAL_TOKEN?.trim();
 if (!INTERNAL_TOKEN) {
   logger.warn("INTERNAL_TOKEN is not set — /heartbeat and /reap are unauthenticated (dev mode)");
+}
+
+// Per-workspace access token: minted at /start (after the ownership check) and
+// presented by the browser in the runner's Socket.IO handshake. Scoped to a
+// single replId so it authorizes the data plane (who may CONNECT to a running
+// pod), not just the control plane (who may provision it). Must match the
+// runner's WORKSPACE_TOKEN_SECRET.
+const WORKSPACE_TOKEN_SECRET = process.env.WORKSPACE_TOKEN_SECRET?.trim();
+const WORKSPACE_TOKEN_TTL = process.env.WORKSPACE_TOKEN_TTL || "12h";
+if (!WORKSPACE_TOKEN_SECRET) {
+  logger.warn(
+    "WORKSPACE_TOKEN_SECRET is not set — /start won't mint per-workspace tokens (runner data-plane auth disabled)"
+  );
 }
 
 const registry = new WorkspaceRegistry();
@@ -168,8 +186,16 @@ app.post("/start", startLimiter, requireAuth, async (req: AuthedRequest, res) =>
         // Seed the idle clock so a freshly-provisioned workspace isn't reaped
         // before its runner boots and the user connects.
         registry.touch(replId);
+        // Mint a token scoped to THIS workspace for the browser's socket handshake.
+        const workspaceToken = WORKSPACE_TOKEN_SECRET
+          ? jwt.sign(
+              { replId, userId, scope: "workspace" },
+              WORKSPACE_TOKEN_SECRET,
+              { expiresIn: WORKSPACE_TOKEN_TTL } as jwt.SignOptions
+            )
+          : undefined;
         log.info("Provisioned workspace");
-        res.status(200).send({ message: "Resources created successfully" });
+        res.status(200).send({ message: "Resources created successfully", workspaceToken });
     } catch (error) {
         log.error("Failed to create resources", { err: error });
         res.status(500).send({ message: "Failed to create resources" });

@@ -7,6 +7,7 @@ import { TerminalManager } from "./pty";
 import { registerActivity, unregisterActivity } from "./heartbeat";
 import { applyPatch } from "./patch";
 import { isValidReplId } from "./validation";
+import { verifyWorkspaceToken } from "./workspaceAuth";
 import { logger } from "./logger";
 import crypto from "crypto";
 
@@ -33,19 +34,8 @@ export function initWs(httpServer: HttpServer) {
     });
       
     io.on("connection", async (socket: Socket) => {
-        const requiredToken = process.env.RUNNER_AUTH_TOKEN;
-        if (requiredToken) {
-          const token = (socket.handshake.auth as { token?: string } | undefined)?.token ??
-            (socket.handshake.headers["x-runner-token"] as string | undefined);
-          if (token !== requiredToken) {
-            socket.disconnect(true);
-            terminalManager.clear(socket.id);
-            return;
-          }
-        }
-
         const host = socket.handshake.headers.host;
-        // Split the host by '.' and take the first part as replId
+        // Derive replId from the Host subdomain (routed here by the Ingress).
         const replId = host?.split('.')[0];
 
         if (!isValidReplId(replId)) {
@@ -54,6 +44,34 @@ export function initWs(httpServer: HttpServer) {
             terminalManager.clear(socket.id);
             return;
         }
+
+        // Data-plane authorization: require a per-workspace token scoped to THIS
+        // replId (minted by the orchestrator for the workspace's owner), so
+        // knowing the replId alone isn't enough to connect. Falls back to the
+        // legacy shared RUNNER_AUTH_TOKEN if configured; if neither secret is
+        // set the socket is open (dev only).
+        const presented =
+            (socket.handshake.auth as { token?: string } | undefined)?.token ??
+            (socket.handshake.headers["x-workspace-token"] as string | undefined) ??
+            (socket.handshake.headers["x-runner-token"] as string | undefined);
+        const workspaceSecret = process.env.WORKSPACE_TOKEN_SECRET?.trim();
+        const legacyToken = process.env.RUNNER_AUTH_TOKEN;
+
+        if (workspaceSecret) {
+            if (!verifyWorkspaceToken(presented, workspaceSecret, replId)) {
+                logger.warn("Rejected socket: invalid or mis-scoped workspace token", { replId });
+                socket.disconnect();
+                terminalManager.clear(socket.id);
+                return;
+            }
+        } else if (legacyToken) {
+            if (presented !== legacyToken) {
+                socket.disconnect(true);
+                terminalManager.clear(socket.id);
+                return;
+            }
+        }
+
         logger.info("Workspace socket connected", { replId, socketId: socket.id });
 
         // Count this connection as live activity for the workspace so the

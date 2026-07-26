@@ -27,6 +27,10 @@ import {
 import { MongoServerError } from "mongodb";
 
 const app = express();
+// Behind the ingress, the client IP is in X-Forwarded-For. Trust exactly one
+// proxy hop so express-rate-limit keys on the real client IP instead of
+// rate-limiting every user as the single ingress IP.
+app.set("trust proxy", 1);
 app.use(express.json());
 app.use(cors() as unknown as RequestHandler)
 

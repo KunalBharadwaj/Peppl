@@ -11,20 +11,24 @@ import { CONFIG } from '../config';
 import { authHeader, useAuth } from '../auth/useAuth';
 import { FiExternalLink, FiRefreshCw } from "react-icons/fi";
 
-function useSocket(replId: string) {
+function useSocket(replId: string, workspaceToken: string | null) {
     const [socket, setSocket] = useState<Socket | null>(null);
 
     useEffect(() => {
         // Reach the workspace pod at <replId>.<workspaceBaseDomain>, routed by the
-        // wildcard-host Ingress. Use wss when the app is served over https.
+        // wildcard-host Ingress. Use wss when the app is served over https. The
+        // per-workspace token (minted by the orchestrator at /start) authorizes
+        // this connection to this specific pod.
         const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const newSocket = io(`${scheme}://${replId}.${CONFIG.workspaceBaseDomain}`);
+        const newSocket = io(`${scheme}://${replId}.${CONFIG.workspaceBaseDomain}`, {
+            auth: workspaceToken ? { token: workspaceToken } : undefined,
+        });
         setSocket(newSocket);
 
         return () => {
             newSocket.disconnect();
         };
-    }, [replId]);
+    }, [replId, workspaceToken]);
 
     return socket;
 }
@@ -156,6 +160,7 @@ const TerminalWrap = styled.div`
 
 export const CodingPage = () => {
     const [podCreated, setPodCreated] = useState(false);
+    const [workspaceToken, setWorkspaceToken] = useState<string | null>(null);
     const [bootError, setBootError] = useState<string | null>(null);
     const [searchParams] = useSearchParams();
     const replId = searchParams.get('replId') ?? '';
@@ -174,7 +179,10 @@ export const CodingPage = () => {
                 { replId },
                 { headers: authHeader(token) }
             )
-                .then(() => setPodCreated(true))
+                .then((res) => {
+                    setWorkspaceToken(res.data?.workspaceToken ?? null);
+                    setPodCreated(true);
+                })
                 .catch((err) => {
                   if (axios.isAxiosError(err) && err.response?.status === 401) {
                     logout();
@@ -203,15 +211,15 @@ export const CodingPage = () => {
           </Boot>
         );
     }
-    return <CodingPagePostPodCreation />
+    return <CodingPagePostPodCreation workspaceToken={workspaceToken} />
 
 }
 
-export const CodingPagePostPodCreation = () => {
+export const CodingPagePostPodCreation = ({ workspaceToken }: { workspaceToken: string | null }) => {
     const [searchParams] = useSearchParams();
     const replId = searchParams.get('replId') ?? '';
     const [loaded, setLoaded] = useState(false);
-    const socket = useSocket(replId);
+    const socket = useSocket(replId, workspaceToken);
     const [fileStructure, setFileStructure] = useState<RemoteFile[]>([]);
     const [selectedFile, setSelectedFile] = useState<File | undefined>(undefined);
     const [showOutput, setShowOutput] = useState(false);
