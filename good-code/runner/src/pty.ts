@@ -1,6 +1,4 @@
-//@ts-ignore => someone fix this
-import { fork, IPty } from 'node-pty';
-import path from "path";
+import { spawn, IPty } from 'node-pty';
 
 const SHELL = "bash";
 
@@ -12,19 +10,19 @@ export class TerminalManager {
     }
     
     createPty(id: string, replId: string, onData: (data: string, id: number) => void) {
-        let term = fork(SHELL, [], {
+        const term = spawn(SHELL, [], {
             cols: 100,
             name: 'xterm',
             cwd: `/workspace`
         });
     
-        term.on('data', (data: string) => onData(data, term.pid));
+        term.onData((data: string) => onData(data, term.pid));
         this.sessions[id] = {
             terminal: term,
             replId
         };
-        term.on('exit', () => {
-            delete this.sessions[term.pid];
+        term.onExit(() => {
+          delete this.sessions[id];
         });
         return term;
     }
