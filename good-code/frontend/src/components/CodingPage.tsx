@@ -15,7 +15,10 @@ function useSocket(replId: string) {
     const [socket, setSocket] = useState<Socket | null>(null);
 
     useEffect(() => {
-        const newSocket = io(`ws://${replId}.peetcode.com`);
+        // Reach the workspace pod at <replId>.<workspaceBaseDomain>, routed by the
+        // wildcard-host Ingress. Use wss when the app is served over https.
+        const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const newSocket = io(`${scheme}://${replId}.${CONFIG.workspaceBaseDomain}`);
         setSocket(newSocket);
 
         return () => {
