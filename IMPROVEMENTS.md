@@ -163,15 +163,35 @@ limits — anyone could spawn unlimited pods (cost/DoS bomb). Only runner had an
 **Note:** metrics endpoint (Prometheus) intentionally deferred — logs + probes cover the
   operational basics; a `/metrics` counter set would be the next stretch.
 
-### 6. Deployment story `[ ]`
-**Gap:** Only `runner` has a Dockerfile. Build artifacts (`aws.js`, `index.js`,
-`tsbuildinfo`) are checked in. Hardcoded `peetcode.com` in `CodingPage.tsx`.
-**Add:**
-- Dockerfiles for `init-service` and `orchestrator-simple`.
-- `docker-compose` for local dev (optionally against LocalStack/minikube).
-- `.gitignore` the build artifacts; remove checked-in `.js`/`.tsbuildinfo`.
-- Move hardcoded domain to config/env.
-**Defense:** "compose up brings the whole plane up locally."
+### 6. Deployment story `[x]` DONE
+**Gap:** Only `runner` had a Dockerfile. Build artifacts were untracked-but-messy
+(orchestrator compiled in place). Hardcoded `peetcode.com` in `CodingPage.tsx`.
+**Done:**
+- **Multi-stage Dockerfiles** for `init-service` and `orchestrator-simple` (build
+  stage with dev deps → slim `node:20-alpine` runtime with prod deps only, non-root
+  `USER node`); `.dockerignore` for each. Orchestrator image bundles `service.yaml`
+  (read at runtime). `runner` already had one.
+- **`docker-compose.yml`** at the repo root brings up the no-Kubernetes slice —
+  MongoDB + MinIO (+ bucket bootstrap) + init-service — so `docker compose up --build`
+  gives a working create-workspace data path. Validated with `docker compose config`.
+- **Fixed the orchestrator build:** it now emits to `dist/` (was compiling in place,
+  so `yarn start`/a Dockerfile would have failed on `dist/index.js`). All three
+  backends now build to `dist/` uniformly.
+- **De-hardcoded the workspace domain:** `CONFIG.workspaceBaseDomain`
+  (`VITE_WORKSPACE_BASE_DOMAIN`) drives the Socket.IO host in `CodingPage`, and it
+  now picks `wss` on https pages. `peetcode.com` is just the default.
+- **Build-artifact hygiene:** `dist/`, in-place `*.js`, and `*.tsbuildinfo` are
+  gitignored across services (done in the hygiene commit).
+- **S3-compatible stores:** init-service enables `s3ForcePathStyle` when a custom
+  `S3_ENDPOINT` is set, so MinIO/LocalStack work locally.
+**Defense:** "`docker compose up` brings the control-plane data path up locally
+  (Mongo + S3 + init-service); the pod-provisioning services run against a real
+  Kubernetes context. Images are multi-stage and run non-root."
+**Caveat:** Compose can't run `orchestrator`/`runner` (they need a live cluster) — they
+  run against kind/minikube. A frontend image (nginx) is a possible add; for now the
+  frontend runs via `npm run dev`. Docker image builds couldn't be executed in this
+  environment (no daemon access), but the Dockerfiles run the same `yarn build` the CI
+  verifies and `docker compose config` validates.
 
 ### 7. README + demo `[x]` DONE
 **Gap:** README was 6 lines; no diagram, setup, screenshot, or live link.
@@ -189,9 +209,8 @@ limits — anyone could spawn unlimited pods (cost/DoS bomb). Only runner had an
 
 ## Suggested sequencing
 Max payoff for min time: **#4 → #1 → #2 → #7**, then #3, #5, #6.
-Done so far: #3, #4, #1, #2, #7, #5. Remaining: **#6 only** (deployment: Dockerfiles for
-init/orchestrator + docker-compose, de-hardcode the workspace domain, gitignore the
-checked-in build artifacts).
+Done: **all seven** (#1–#7). Possible follow-ups: a Prometheus `/metrics` endpoint (#5
+stretch), a frontend Docker image + deployed live demo, and a screenshot/GIF in the README.
 
 ## Target resume bullet (defensible once #1, #2, #4, #5 land)
 > Built a Kubernetes-native disposable code-workspace platform (4 microservices,

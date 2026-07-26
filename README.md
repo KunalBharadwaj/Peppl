@@ -151,8 +151,8 @@ sequenceDiagram
 **Backend:** Node.js · Express · TypeScript · Socket.IO · `node-pty` ·
 MongoDB · AWS SDK (S3) · `@kubernetes/client-node` · `jsonwebtoken` ·
 `google-auth-library` · `express-rate-limit`
-**Infra:** Kubernetes (Deployment / Service / Ingress / NetworkPolicy / CronJob) ·
-ingress-nginx · S3
+**Infra:** Docker (multi-stage) · docker-compose · Kubernetes (Deployment /
+Service / Ingress / NetworkPolicy / CronJob) · ingress-nginx · S3 (MinIO for local)
 **Testing/CI:** Vitest · `mongodb-memory-server` · GitHub Actions
 
 ## Getting started (local)
@@ -161,6 +161,25 @@ ingress-nginx · S3
 > and `.env` — there is **no** root workspace tooling. `cd` into a service before
 > running its scripts. You'll need Node ≥ 20, a MongoDB, an S3-compatible store,
 > and (for provisioning) a reachable Kubernetes context.
+
+### Quick start with Docker Compose
+
+`docker compose up --build` brings up the control-plane data path —
+**MongoDB + MinIO (S3) + init-service** — with no Kubernetes required:
+
+```bash
+cp .env.example .env   # set GOOGLE_CLIENT_ID, JWT_SECRET (optional for a smoke test)
+docker compose up --build
+# init-service → http://localhost:3001  (try GET /healthz)
+# MinIO console → http://localhost:9001  (minioadmin / minioadmin)
+```
+
+Then run the frontend against it with `npm run dev` (below). The
+`orchestrator-simple` and `runner` services provision real pods, so they need a
+Kubernetes context (kind/minikube) rather than Compose — point `kubeconfig` at
+your cluster and run the orchestrator with `yarn dev`.
+
+### Manual setup
 
 **1. Copy and fill the env files** (`.env.example` lives in each service; the
 frontend's is at the frontend root):
@@ -224,7 +243,8 @@ good-code/
 
 ## Roadmap
 
-See [`IMPROVEMENTS.md`](IMPROVEMENTS.md). Done: auth + rate limiting, workspace
-security hardening, idle reaping/lifecycle, tests + CI. Next: health/readiness
-probes + structured logging, Dockerfiles + `docker-compose` for the whole plane,
-and moving the remaining hardcoded workspace domain into config.
+See [`IMPROVEMENTS.md`](IMPROVEMENTS.md) for the full log. Done: auth + rate
+limiting, workspace security hardening, idle reaping/lifecycle, tests + CI,
+health/readiness probes + structured logging, and containerization
+(Dockerfiles + `docker-compose`). Possible next steps: a Prometheus `/metrics`
+endpoint, and a deployed live demo.
