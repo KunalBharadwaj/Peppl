@@ -209,8 +209,23 @@ limits — anyone could spawn unlimited pods (cost/DoS bomb). Only runner had an
 
 ## Suggested sequencing
 Max payoff for min time: **#4 → #1 → #2 → #7**, then #3, #5, #6.
-Done: **all seven** (#1–#7). Possible follow-ups: a Prometheus `/metrics` endpoint (#5
-stretch), a frontend Docker image + deployed live demo, and a screenshot/GIF in the README.
+Done: **all seven** (#1–#7).
+
+### Post-review hardening (done)
+Two gaps a sharp interviewer would probe, now closed:
+- **Data-plane auth.** Previously anyone who knew a `replId` could open a socket to the
+  running pod (runner had only an *optional shared* token). Now the orchestrator mints a
+  per-workspace JWT at `/start` (after the ownership check), scoped to `{replId, userId}`;
+  the browser presents it in the Socket.IO handshake and the runner verifies the signature
+  + that the `replId` claim matches this pod (`runner/src/workspaceAuth.ts`, unit-tested).
+  The legacy shared `RUNNER_AUTH_TOKEN` remains a fallback. New env: `WORKSPACE_TOKEN_SECRET`
+  (orchestrator signs, runner verifies).
+- **Rate-limit IP keying.** `app.set("trust proxy", 1)` on both control-plane services so
+  `express-rate-limit` keys on the real client IP (`X-Forwarded-For`) behind the ingress
+  instead of rate-limiting all users as the single ingress IP.
+
+Possible follow-ups: a Prometheus `/metrics` endpoint (#5 stretch), a frontend Docker image
++ deployed live demo, and a screenshot/GIF in the README.
 
 ## Target resume bullet (defensible once #1, #2, #4, #5 land)
 > Built a Kubernetes-native disposable code-workspace platform (4 microservices,

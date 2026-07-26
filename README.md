@@ -134,7 +134,8 @@ sequenceDiagram
 | Concern | Approach |
 |---|---|
 | **Identity** | Google OAuth2 (GIS ID-token) verified server-side, exchanged for a short-lived JWT that every service checks with a shared `JWT_SECRET` — no extra cross-service call. |
-| **Abuse / cost control** | Per-IP rate limits on auth + provisioning; a per-user cap (`MAX_REPLS_PER_USER`, default 5) enforced against Mongo; `/start` and `/stop` verify the caller *owns* the workspace. |
+| **Workspace access (data plane)** | Connecting to a running pod requires a per-workspace token minted at `/start` for the owner and scoped to that `replId` — knowing the workspace id isn't enough. The runner verifies the token's signature and that its `replId` claim matches the pod. |
+| **Abuse / cost control** | Per-IP rate limits (keyed on the real client IP via `trust proxy` behind the ingress) on auth + provisioning; a per-user cap (`MAX_REPLS_PER_USER`, default 5) enforced against Mongo; `/start` and `/stop` verify the caller *owns* the workspace. |
 | **Injection** | `replId` is validated against `^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$` at every entry point before it becomes a K8s name, S3 key, Ingress host, or YAML value. |
 | **Workspace sandboxing** | Non-root pod (shared UID 1000, `fsGroup`), `runAsNonRoot`, seccomp `RuntimeDefault`, `capabilities: drop [ALL]`, CPU/mem/ephemeral-storage limits, and file access confined under `/workspace` (traversal attempts rejected). |
 | **Network isolation** | Egress `NetworkPolicy` allows DNS + public internet (package managers, S3) but blocks cluster-internal ranges and `169.254.169.254` (SSRF / IAM-credential theft). |
