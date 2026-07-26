@@ -3,7 +3,11 @@ import { S3 } from "aws-sdk"
 const s3 = new S3({
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    endpoint: process.env.S3_ENDPOINT
+    endpoint: process.env.S3_ENDPOINT,
+    // S3-compatible stores (MinIO/LocalStack, used in docker-compose) require
+    // path-style addressing; real AWS S3 ignores this. Only force it when a
+    // custom endpoint is configured.
+    s3ForcePathStyle: !!process.env.S3_ENDPOINT,
 })
 
 export async function copyS3Folder(sourcePrefix: string, destinationPrefix: string, continuationToken?: string): Promise<void> {

@@ -1,4 +1,8 @@
 node_modules
 dist
+test
 *.tsbuildinfo
 .env
+.git
+Dockerfile
+.dockerignore
