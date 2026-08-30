@@ -95,13 +95,31 @@ function requireInternalToken(
   next();
 }
 
+// Deploy-time substitutions applied to service.yaml alongside the per-request
+// `service_name` -> replId swap. These let the same template target any
+// environment (which runner image to run, which bucket to seed from, which
+// wildcard domains route to the pod) without editing the checked-in YAML.
+// Secrets are NOT substituted here — the template references them via
+// secretKeyRef against the `peppl-workspace` Secret in the namespace.
+const workspaceSubstitutions: Record<string, string> = {
+    __RUNNER_IMAGE__: process.env.RUNNER_IMAGE || "100xdevs/runner:latest",
+    __S3_BUCKET__: process.env.S3_BUCKET || "repl",
+    __WORKSPACE_BASE_DOMAIN__: process.env.WORKSPACE_BASE_DOMAIN || "peetcode.com",
+    __OUTPUT_BASE_DOMAIN__: process.env.OUTPUT_BASE_DOMAIN || "autogpt-cloud.com",
+    __ORCHESTRATOR_URL__: process.env.WORKSPACE_ORCHESTRATOR_URL || "http://orchestrator-simple:3002",
+};
+
 // Updated utility function to handle multi-document YAML files
 const readAndParseKubeYaml = (filePath: string, replId: string): Array<any> => {
     const fileContent = fs.readFileSync(filePath, 'utf8');
     const docs = yaml.parseAllDocuments(fileContent).map((doc) => {
         let docString = doc.toString();
-        const regex = new RegExp(`service_name`, 'g');
-        docString = docString.replace(regex, replId);
+        // replId first (validated charset [a-z0-9-], so it can't introduce a
+        // placeholder token), then the deploy-time placeholders.
+        docString = docString.split("service_name").join(replId);
+        for (const [token, value] of Object.entries(workspaceSubstitutions)) {
+            docString = docString.split(token).join(value);
+        }
         return yaml.parse(docString);
     });
     return docs;
