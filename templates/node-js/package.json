@@ -1,0 +1,10 @@
+{
+  "name": "peppl-node-workspace",
+  "version": "1.0.0",
+  "description": "Starter Node.js workspace on Peppl",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "license": "MIT"
+}

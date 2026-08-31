@@ -1,6 +1,8 @@
 #root {
   margin: 0 auto;
-  padding: 2rem;
+  padding: 0;
+  height: 100vh;
+  width: 100%;
 }
 
 .logo {
@@ -119,11 +121,12 @@
 }
 
 .xterm .composition-view {
-  /* TODO: Composition position got messed up somewhere */
   background: #000;
   color: #FFF;
   display: none;
   position: absolute;
+  left: 0;
+  top: 0;
   white-space: nowrap;
   z-index: 1;
 }

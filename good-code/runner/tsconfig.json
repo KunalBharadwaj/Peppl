@@ -105,5 +105,8 @@
     /* Completeness */
     // "skipDefaultLibCheck": true,                      /* Skip type checking .d.ts files that are included with TypeScript. */
     "skipLibCheck": true                                 /* Skip type checking all .d.ts files. */
-  }
+  },
+  // Only the service source is compiled by `tsc -b`. Tests under test/ are run
+  // by vitest (esbuild), so they must not be part of the typed build.
+  "include": ["src"]
 }

@@ -1,0 +1,53 @@
+# Control-plane ingress: frontend + the two control-plane APIs.
+#
+# Host strategy: keep these OFF the wildcard workspace domain. Workspace pods are
+# reached at <replId>.<WORKSPACE_BASE_DOMAIN>, so putting the control plane on a
+# DIFFERENT domain (below, *.peppl.app as an example) avoids any collision with a
+# replId literally named "api"/"app"/"orchestrator".
+#
+# TLS: the workspace sockets run over wss, so the control plane should be https
+# too. Install cert-manager and uncomment the annotation + tls block, or
+# terminate TLS at your cloud LB.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: peppl-control-plane
+  annotations:
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  # tls:
+  #   - hosts: [app.peppl.app, api.peppl.app, orchestrator.peppl.app]
+  #     secretName: peppl-control-plane-tls
+  rules:
+    - host: app.peppl.app            # <-- frontend
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+    - host: api.peppl.app            # <-- init-service (VITE_CONTROL_PLANE_URL)
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: init-service
+                port:
+                  number: 3001
+    - host: orchestrator.peppl.app   # <-- orchestrator (VITE_ORCHESTRATOR_URL)
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: orchestrator-simple
+                port:
+                  number: 3002

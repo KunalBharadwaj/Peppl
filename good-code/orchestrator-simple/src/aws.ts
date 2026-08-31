@@ -76,7 +76,9 @@ function writeFile(filePath: string, fileData: Buffer): Promise<void> {
     return new Promise(async (resolve, reject) => {
         await createFolder(path.dirname(filePath));
 
-        fs.writeFile(filePath, fileData, (err) => {
+        // Buffer is a Uint8Array at runtime; the cast satisfies the stricter
+        // fs.writeFile overload typing in newer @types/node.
+        fs.writeFile(filePath, fileData as Uint8Array, (err) => {
             if (err) {
                 reject(err)
             } else {

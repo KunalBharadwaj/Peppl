@@ -1,0 +1,2 @@
+# Never commit filled-in secrets. Copy secrets.example.yaml -> secrets.yaml.
+secrets.yaml

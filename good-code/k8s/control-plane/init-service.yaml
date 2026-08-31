@@ -1,0 +1,82 @@
+# init-service: the create-workspace control-plane API (POST /project, /auth/google).
+# Writes the repls/users collections in Mongo and copies the S3 template on create.
+# Replace the image with your registry path before applying.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: init-service
+  labels:
+    app: init-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: init-service
+  template:
+    metadata:
+      labels:
+        app: init-service
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: init-service
+          image: ghcr.io/OWNER/peppl-init-service:latest   # <-- set your registry/tag
+          ports:
+            - containerPort: 3001
+          env:
+            - name: PORT
+              value: "3001"
+            - name: SERVICE_NAME
+              value: init-service
+            - name: MONGODB_DB_NAME
+              value: repl
+            - name: S3_BUCKET
+              value: repl                                    # <-- your bucket
+            - name: MAX_REPLS_PER_USER
+              value: "5"
+            - name: JWT_EXPIRES_IN
+              value: "12h"
+            - name: LOG_LEVEL
+              value: info
+            - name: MONGODB_URI
+              valueFrom: { secretKeyRef: { name: peppl-control, key: MONGODB_URI } }
+            - name: JWT_SECRET
+              valueFrom: { secretKeyRef: { name: peppl-control, key: JWT_SECRET } }
+            - name: GOOGLE_CLIENT_ID
+              valueFrom: { secretKeyRef: { name: peppl-control, key: GOOGLE_CLIENT_ID } }
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: peppl-control, key: AWS_ACCESS_KEY_ID } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: peppl-control, key: AWS_SECRET_ACCESS_KEY } }
+            - name: S3_ENDPOINT
+              valueFrom: { secretKeyRef: { name: peppl-control, key: S3_ENDPOINT, optional: true } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet: { path: /healthz, port: 3001 }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /readyz, port: 3001 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: init-service
+spec:
+  selector:
+    app: init-service
+  ports:
+    - protocol: TCP
+      port: 3001
+      targetPort: 3001

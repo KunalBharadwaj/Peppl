@@ -1,0 +1,124 @@
+# orchestrator-simple: provisions/tears down the per-repl workspace pods.
+# It calls the Kubernetes API in-cluster, so it needs a ServiceAccount with RBAC
+# to manage Deployments/Services/Ingresses/NetworkPolicies in this namespace.
+# The Service MUST be named `orchestrator-simple` on port 3002 — the reaper
+# CronJob, the runner's heartbeat, and the per-repl NetworkPolicy all target it.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: orchestrator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: orchestrator-workspace-manager
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "delete", "get", "list"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "delete", "get", "list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["create", "delete", "get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: orchestrator-workspace-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: orchestrator-workspace-manager
+subjects:
+  - kind: ServiceAccount
+    name: orchestrator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator-simple
+  labels:
+    app: orchestrator-simple
+spec:
+  # Keep at 1: the idle-liveness map is in-memory (see IMPROVEMENTS.md #1). Live
+  # pods re-register within one heartbeat interval after a restart.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator-simple
+  template:
+    metadata:
+      labels:
+        app: orchestrator-simple
+    spec:
+      serviceAccountName: orchestrator
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: orchestrator
+          image: ghcr.io/OWNER/peppl-orchestrator:latest   # <-- set your registry/tag
+          ports:
+            - containerPort: 3002
+          env:
+            - name: PORT
+              value: "3002"
+            - name: SERVICE_NAME
+              value: orchestrator-simple
+            - name: MONGODB_DB_NAME
+              value: repl
+            - name: IDLE_TTL_MS
+              value: "1800000"                               # 30 min
+            - name: WORKSPACE_TOKEN_TTL
+              value: "12h"
+            - name: LOG_LEVEL
+              value: info
+            # Deploy-time template config (substituted into service.yaml):
+            - name: RUNNER_IMAGE
+              value: ghcr.io/OWNER/peppl-runner:latest       # <-- set your registry/tag
+            - name: S3_BUCKET
+              value: repl                                    # <-- your bucket
+            - name: WORKSPACE_BASE_DOMAIN
+              value: peetcode.com                            # <-- your wildcard domain
+            - name: OUTPUT_BASE_DOMAIN
+              value: autogpt-cloud.com                       # <-- your output domain
+            - name: WORKSPACE_ORCHESTRATOR_URL
+              value: "http://orchestrator-simple:3002"
+            - name: MONGODB_URI
+              valueFrom: { secretKeyRef: { name: peppl-control, key: MONGODB_URI } }
+            - name: JWT_SECRET
+              valueFrom: { secretKeyRef: { name: peppl-control, key: JWT_SECRET } }
+            - name: INTERNAL_TOKEN
+              valueFrom: { secretKeyRef: { name: peppl-control, key: INTERNAL_TOKEN } }
+            - name: WORKSPACE_TOKEN_SECRET
+              valueFrom: { secretKeyRef: { name: peppl-control, key: WORKSPACE_TOKEN_SECRET } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet: { path: /healthz, port: 3002 }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /readyz, port: 3002 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator-simple
+spec:
+  selector:
+    app: orchestrator-simple
+  ports:
+    - protocol: TCP
+      port: 3002
+      targetPort: 3002

@@ -1,3 +1,12 @@
+# Per-repl workspace template. The orchestrator reads this at /start, then
+# substitutes two kinds of placeholder before applying it to the cluster:
+#   * service_name              -> the replId (per-request, from the API call)
+#   * __RUNNER_IMAGE__ etc.     -> deploy-time config from the orchestrator's env
+#     (RUNNER_IMAGE, S3_BUCKET, WORKSPACE_BASE_DOMAIN, OUTPUT_BASE_DOMAIN,
+#      ORCHESTRATOR_URL) — see readAndParseKubeYaml in src/index.ts.
+# Secrets (AWS creds, token secrets) are pulled from a `peppl-workspace` Secret
+# in the namespace via secretKeyRef, so they never appear in this file or in the
+# rendered manifest. Create it before provisioning (see k8s/control-plane).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,6 +23,17 @@ spec:
       labels:
         app: service_name
     spec:
+      # Run every container in the pod as the same non-root user. Sharing the UID
+      # (1000) across the initContainer and runner means the files the
+      # initContainer seeds into the shared volume stay owned by — and writable
+      # by — the runner. fsGroup makes the emptyDir group-writable on mount.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
         - name: workspace-volume
           emptyDir: {}
@@ -21,35 +41,123 @@ spec:
         - name: copy-s3-resources
           image: amazon/aws-cli
           command: ["/bin/sh", "-c"]
+          # Seed the workspace from the user's code prefix in S3. If S3_ENDPOINT
+          # is set (MinIO/LocalStack), pass it through to the CLI.
           args:
             - >
-              aws s3 cp s3://repl/code/service_name/ /workspace/ --recursive &&
+              aws s3 cp s3://__S3_BUCKET__/code/service_name/ /workspace/ --recursive
+              ${S3_ENDPOINT:+--endpoint-url $S3_ENDPOINT} &&
               echo "Resources copied from S3";
           env:
             - name: AWS_ACCESS_KEY_ID
-              value: "your_aws_key_id"
+              valueFrom:
+                secretKeyRef:
+                  name: peppl-workspace
+                  key: AWS_ACCESS_KEY_ID
             - name: AWS_SECRET_ACCESS_KEY
-              value: "your_aws_secret"
+              valueFrom:
+                secretKeyRef:
+                  name: peppl-workspace
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: peppl-workspace
+                  key: S3_ENDPOINT
+                  optional: true
+            # aws-cli writes its cache under $HOME; as a non-root user the image's
+            # default home may not be writable, so point it at a writable dir.
+            - name: HOME
+              value: "/tmp"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: workspace-volume
               mountPath: /workspace
       containers:
         - name: runner
-          image: 100xdevs/runner:latest
+          image: __RUNNER_IMAGE__
+          # The runner executes untrusted user code (terminal + user program), so
+          # strip every privilege the workload doesn't need. rootFS is left
+          # writable (node/npm/tmp scratch); the blast radius is one ephemeral pod
+          # bounded by the resource limits below and the NetworkPolicy.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PORT
+              value: "3001"
+            - name: SERVICE_NAME
+              value: runner
+            # Heartbeat target so this pod keeps itself out of the idle reaper
+            # while a socket is live. Same-namespace Service DNS.
+            - name: ORCHESTRATOR_URL
+              value: "__ORCHESTRATOR_URL__"
+            - name: S3_BUCKET
+              value: "__S3_BUCKET__"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: peppl-workspace
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: peppl-workspace
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: peppl-workspace
+                  key: S3_ENDPOINT
+                  optional: true
+            # Verifies the browser's per-workspace socket handshake token (signed
+            # by the orchestrator at /start). Must match the orchestrator's.
+            - name: WORKSPACE_TOKEN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: peppl-workspace
+                  key: WORKSPACE_TOKEN_SECRET
+            # Authenticates the runner -> orchestrator heartbeat.
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: peppl-workspace
+                  key: INTERNAL_TOKEN
+            - name: CORS_ORIGIN
+              value: "*"
           ports:
             - containerPort: 3001
             - containerPort: 3000
+          # Liveness restarts a wedged runner; readiness holds traffic until the
+          # initContainer has seeded /workspace (see the runner's /readyz).
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3001
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 3001
+            initialDelaySeconds: 3
+            periodSeconds: 10
           volumeMounts:
             - name: workspace-volume
               mountPath: /workspace
           resources:
-            # Bounty $25 Use ephemeral-storage to add space limits here
             requests:
               cpu: "1"
               memory: "1Gi"
+              ephemeral-storage: "1Gi"
             limits:
               cpu: "1"
               memory: "1Gi"
+              ephemeral-storage: "2Gi"
 
 ---
 apiVersion: v1
@@ -76,7 +184,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-  - host: service_name.peetcode.com
+  - host: service_name.__WORKSPACE_BASE_DOMAIN__
     http:
       paths:
       - path: /
@@ -86,7 +194,7 @@ spec:
             name: service_name
             port:
               number: 3001
-  - host: service_name.autogpt-cloud.com
+  - host: service_name.__OUTPUT_BASE_DOMAIN__
     http:
       paths:
       - path: /
@@ -95,4 +203,56 @@ spec:
           service:
             name: service_name
             port:
-              number: 3000 
+              number: 3000
+---
+# Restricts only egress (ingress stays open so the socket connection routed
+# through ingress-nginx still reaches the pod). Requires a CNI that enforces
+# NetworkPolicy (Calico, Cilium, etc.).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: service_name
+spec:
+  podSelector:
+    matchLabels:
+      app: service_name
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS. kube-dns lives in the cluster's private range, which the
+    # internet rule below deliberately excludes, so DNS needs its own allow.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow the one legitimate cluster-internal call: the runner's heartbeat to
+    # the orchestrator. Scoped to the orchestrator pod on its port so the broad
+    # cluster-internal block below still stops all other lateral movement.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app: orchestrator-simple
+      ports:
+        - protocol: TCP
+          port: 3002
+    # Allow the public internet (package managers, public S3) while blocking
+    # cluster-internal ranges and the cloud metadata endpoint (169.254.169.254)
+    # to stop lateral movement and IAM-credential theft (SSRF) from user code.
+    # NOTE: if S3_ENDPOINT is a private/VPC endpoint in a blocked range, add an
+    # explicit allow rule for it. The runner's heartbeat to the orchestrator also
+    # needs the orchestrator reachable — expose it via the ingress (public) or
+    # add an explicit allow rule for its ClusterIP.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
